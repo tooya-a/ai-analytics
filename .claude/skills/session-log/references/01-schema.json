@@ -1,0 +1,15 @@
+{
+  "user": "string — git config user.name の値",
+  "date": "YYYY-MM-DD",
+  "started_at": "HH:MM（会話の最初のメッセージ時刻、不明な場合は現在時刻）",
+  "category": "bug_fix | feature | design | refactor | infrastructure | question",
+  "topic": "string — 何に取り組んだか（1行）",
+  "problem": "string — 解こうとした課題の説明",
+  "approach": "string — どのようにAIと壁打ちしたか（試行錯誤の流れ）",
+  "resolution": "resolved | unresolved | in_progress",
+  "output": "string | null — 成果物（例: PR#42、src/lib/auth.ts を修正、など）",
+  "pivot_count": "number — 方針転換した回数（0以上）",
+  "key_decisions": ["string — 重要な判断とその理由"],
+  "blockers": ["string — 解決できなかった点・ハマった点"],
+  "notes": "string | null — その他メモ"
+}

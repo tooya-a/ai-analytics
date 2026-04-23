@@ -9,7 +9,7 @@ from anthropic import Anthropic
 
 st.set_page_config(page_title="AI Analytics", page_icon="📊", layout="wide")
 
-LOGS_DIR = os.getenv("LOGS_DIR", "../reservation-system/logs/sessions")
+LOGS_DIR = os.getenv("LOGS_DIR", "logs/sessions")
 
 
 @st.cache_data
