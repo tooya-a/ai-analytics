@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .env
+
+# 個人の Claude 上書き（共有しない）
+.claude/settings.local.json
