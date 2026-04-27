@@ -12,7 +12,7 @@ st.set_page_config(page_title="AI Analytics", page_icon="📊", layout="wide")
 LOGS_DIR = os.getenv("LOGS_DIR", "logs/sessions")
 
 
-@st.cache_data
+@st.cache_data(ttl=30)
 def load_logs(logs_dir: str) -> pd.DataFrame:
     records = []
     for f in Path(logs_dir).glob("*.json"):
@@ -35,14 +35,17 @@ def load_logs(logs_dir: str) -> pd.DataFrame:
 def kpi_cards(df: pd.DataFrame):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("総セッション数", len(df))
-    c2.metric("ユーザー数", df["user"].nunique())
-    avg_pivot = df["pivot_count"].mean()
-    c3.metric("平均ピボット数", f"{avg_pivot:.1f}")
-    resolution_rate = df["resolved"].mean() * 100
-    c4.metric("解決率", f"{resolution_rate:.0f}%")
+    c2.metric("ユーザー数", df["user"].nunique() if "user" in df.columns else 0)
+    avg_pivot = df["pivot_count"].mean() if not df.empty else 0.0
+    c3.metric("平均ピボット数", f"{avg_pivot:.1f}" if not pd.isna(avg_pivot) else "0.0")
+    resolution_rate = df["resolved"].mean() * 100 if not df.empty else 0.0
+    c4.metric("解決率", f"{resolution_rate:.0f}%" if not pd.isna(resolution_rate) else "0%")
 
 
 def timeline_chart(df: pd.DataFrame):
+    if df.empty:
+        st.caption("データがありません")
+        return
     daily = df.groupby("date").size().reset_index(name="count")
     fig = px.bar(daily, x="date", y="count", title="セッション数の推移", labels={"date": "日付", "count": "セッション数"})
     fig.update_layout(showlegend=False)
@@ -50,6 +53,9 @@ def timeline_chart(df: pd.DataFrame):
 
 
 def pivot_by_user(df: pd.DataFrame):
+    if df.empty:
+        st.caption("データがありません")
+        return
     fig = px.box(
         df, x="user", y="pivot_count", color="user",
         title="ユーザー別ピボット数分布",
@@ -72,6 +78,9 @@ def category_by_user(df: pd.DataFrame):
 
 
 def resolution_by_user(df: pd.DataFrame):
+    if df.empty:
+        st.caption("データがありません")
+        return
     rate = (
         df.groupby("user")["resolved"]
         .agg(resolved="sum", total="count")
@@ -140,20 +149,21 @@ st.title("📊 AI壁打ち Analytics")
 df = load_logs(LOGS_DIR)
 
 if df.empty:
-    st.error(f"ログが見つかりません: `{LOGS_DIR}`")
-    st.stop()
+    st.info(f"ログがまだありません（`{LOGS_DIR}`）。/session-log スキルで記録を始めましょう。")
 
 # Sidebar filters
 st.sidebar.header("フィルター")
-users = ["全員"] + sorted(df["user"].unique().tolist())
+users = ["全員"] + (sorted(df["user"].unique().tolist()) if not df.empty and "user" in df.columns else [])
 selected_user = st.sidebar.selectbox("ユーザー", users)
 filtered = df if selected_user == "全員" else df[df["user"] == selected_user]
 
+_today = pd.Timestamp.now().date()
+_date_default = (df["date"].min().date(), df["date"].max().date()) if not df.empty else (_today, _today)
 date_range = st.sidebar.date_input(
     "期間",
-    value=(df["date"].min().date(), df["date"].max().date()),
+    value=_date_default,
 )
-if len(date_range) == 2:
+if len(date_range) == 2 and not filtered.empty and "date" in filtered.columns:
     start, end = date_range
     filtered = filtered[(filtered["date"].dt.date >= start) & (filtered["date"].dt.date <= end)]
 
@@ -181,7 +191,8 @@ with tab2:
 
     st.subheader("セッション一覧")
     cols = [c for c in ["date", "user", "category", "topic", "pivot_count", "resolution"] if c in filtered.columns]
-    st.dataframe(filtered[cols].sort_values("date", ascending=False), use_container_width=True)
+    display_df = filtered[cols].sort_values("date", ascending=False) if "date" in filtered.columns else filtered[cols]
+    st.dataframe(display_df, use_container_width=True)
 
 with tab3:
     user_for_analysis = None if selected_user == "全員" else selected_user
