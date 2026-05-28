@@ -28,9 +28,9 @@ LOGS_DIR=~/ai-logs/sessions streamlit run app.py
 **単一ファイル Streamlit アプリ**（`app.py`、約190行）。レイヤ分けはしないこと。データフローは以下の一方向：
 
 ```
-logs/sessions/*.json  ──▶  load_logs()  ──▶  pd.DataFrame  ──▶  3 tabs (KPI / per-user / Claude analysis)
+logs/sessions/*.json  ──▶  load_logs()  ──▶  pd.DataFrame  ──▶  3 tabs (KPI / per-user / AI機能)
                                                   │
-                                                  └─ tab3 only: Anthropic API (claude-sonnet-4-6)
+                                                  └─ tab3 (AI機能) only: Anthropic API (claude-haiku-4-5 / claude-sonnet-4-6)
 ```
 
 ### 重要な設計ポイント
@@ -39,8 +39,9 @@ logs/sessions/*.json  ──▶  load_logs()  ──▶  pd.DataFrame  ──▶
 - **ログ生成の本体は外部スキル**: ログ JSON を作るのは `/session-log` スラッシュコマンド（`.claude/skills/session-log/`）。app.py は読み込み専用。
 - **`LOGS_DIR` 環境変数**: デフォルトは `logs/sessions/`（リポジトリ内・個人データなので `.gitignore` 済み）。複数プロジェクトのログを集約する場合は `LOGS_DIR` で切り替える前提。パスをハードコードしないこと。
 - **`@st.cache_data`**: `load_logs()` はキャッシュされる。新規ログを追加した直後はサイドバーの「キャッシュ更新」ボタンを押さないと反映されない。
-- **API キー解決順**: tab3 の Claude 分析は `st.secrets["ANTHROPIC_API_KEY"]` → `os.getenv("ANTHROPIC_API_KEY")` の順で読む。未設定時はプロンプトを `st.code` で表示するフォールバックがある（手動コピペ用）。この**フォールバックは仕様**なので削らないこと。
-- **モデル ID**: tab3 は `claude-sonnet-4-6` で固定。変える場合は最新のモデル ID を確認すること。
+- **API キー解決順**: `st.secrets["ANTHROPIC_API_KEY"]` → `os.getenv("ANTHROPIC_API_KEY")` の順で読む。未設定時はボタンクリック時にトースト通知を出す（フォールバック）。この**フォールバックは仕様**なので削らないこと。
+- **モデル ID**: ログ自動生成は `claude-haiku-4-5-20251001`、パターン分析は `claude-sonnet-4-6` で固定。変える場合は最新のモデル ID を確認すること。
+- **タブ構成**: `📈 概要` / `👤 ユーザー別` / `🤖 AI機能` の3タブ。AI機能タブはログ生成（上部）とパターン分析（下部）を統合。
 
 ## ファイル運用ルール
 
