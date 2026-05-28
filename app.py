@@ -1,15 +1,39 @@
+import re
+import subprocess
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from anthropic import Anthropic
 
 st.set_page_config(page_title="AI Analytics", page_icon="📊", layout="wide")
 
+st.markdown("""
+<style>
+div[data-testid="stToast"] {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9999;
+}
+</style>
+""", unsafe_allow_html=True)
+
 LOGS_DIR = os.getenv("LOGS_DIR", "logs/sessions")
+
+try:
+    _DEFAULT_USER = subprocess.check_output(["git", "config", "user.name"], text=True).strip()
+except Exception:
+    _DEFAULT_USER = ""
+
+_home = Path.home()
+_encoded = str(Path.cwd()).replace("/", "-")
+TRANSCRIPT_DIR = _home / ".claude" / "projects" / _encoded
 
 
 @st.cache_data(ttl=30)
@@ -26,10 +50,21 @@ def load_logs(logs_dir: str) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"]).fillna(pd.Timestamp.now().normalize())
     df["pivot_count"] = pd.to_numeric(df.get("pivot_count", 0), errors="coerce").fillna(0)
     df["resolved"] = df.get("resolution", "").eq("resolved")
     return df
+
+
+def save_log(data: dict, logs_dir: str) -> str:
+    topic_slug = re.sub(r"[^\w]", "_", data["topic"].lower())[:40]
+    user = data.get("user") or _DEFAULT_USER or "unknown"
+    filename = f"{data['date']}-{user}-{topic_slug}.json"
+    path = Path(logs_dir) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return str(path)
 
 
 def kpi_cards(df: pd.DataFrame):
@@ -125,7 +160,13 @@ def text_analysis(df: pd.DataFrame, selected_user: str | None):
 2. ピボット（方向転換）が多い場合のパターン
 3. チーム全体として改善できそうな点"""
 
-    api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    try:
+        try:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        except Exception:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+    except Exception:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         st.warning("ANTHROPIC_API_KEY が設定されていません。`.streamlit/secrets.toml` に追加してください。")
         with st.expander("プロンプト（手動でClaudeに貼り付ける用）"):
@@ -140,6 +181,103 @@ def text_analysis(df: pd.DataFrame, selected_user: str | None):
             messages=[{"role": "user", "content": prompt}],
         )
     st.markdown(response.content[0].text)
+
+
+def load_latest_transcript(transcript_dir: Path) -> list[dict]:
+    files = sorted(transcript_dir.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if not files:
+        return []
+    messages = []
+    for line in files[0].open(encoding="utf-8"):
+        try:
+            obj = json.loads(line)
+            if obj.get("type") not in ("user", "assistant"):
+                continue
+            role = obj["type"]
+            content = obj.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+            if content.strip():
+                messages.append({"role": role, "content": content[:2000]})
+        except Exception:
+            continue
+    return messages
+
+
+def generate_log_from_transcript(messages: list[dict], api_key: str) -> dict:
+    client = Anthropic(api_key=api_key)
+    prompt = f"""以下はClaude Codeのセッション会話です。内容を分析し、下記のJSON形式でセッションログを生成してください。
+値が不明な場合はnullまたは空配列にしてください。JSONのみ出力してください。
+
+スキーマ:
+{{
+  "user": "{_DEFAULT_USER}",
+  "date": "YYYY-MM-DD",
+  "started_at": "HH:MM",
+  "category": "bug_fix|feature|design|refactor|infrastructure|question",
+  "topic": "1行の説明",
+  "problem": "解こうとした課題",
+  "approach": "試行錯誤の流れ",
+  "resolution": "resolved|unresolved|in_progress",
+  "output": "成果物またはnull",
+  "pivot_count": 0,
+  "key_decisions": ["決定1"],
+  "blockers": [],
+  "notes": null
+}}
+
+会話:
+{json.dumps(messages, ensure_ascii=False)[:8000]}
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = response.content[0].text.strip()
+    text = re.sub(r"^```[a-z]*\n?", "", text)
+    text = re.sub(r"\n?```$", "", text)
+    return json.loads(text)
+
+
+def log_form(logs_dir: str):
+    st.subheader("セッションログを自動生成")
+
+    try:
+        try:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        except Exception:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+    except Exception:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+
+    col, _ = st.columns([2, 3])
+    if col.button("🔍 直近のセッションを分析してログを生成", use_container_width=True):
+        if not api_key:
+            st.toast("ANTHROPIC_API_KEY が未設定です。`.streamlit/secrets.toml` に追加してください。", icon="🔑")
+            return
+        messages = load_latest_transcript(TRANSCRIPT_DIR)
+        if not messages:
+            st.toast(f"トランスクリプトが見つかりません: {TRANSCRIPT_DIR}", icon="⚠️")
+            return
+        with st.spinner("Claudeが会話を分析中..."):
+            try:
+                data = generate_log_from_transcript(messages, api_key)
+                st.session_state["generated_log"] = data
+            except Exception as e:
+                st.error(f"生成に失敗しました: {e}")
+                return
+
+    if "generated_log" in st.session_state:
+        data = st.session_state["generated_log"]
+        st.subheader("生成されたログ")
+        st.json(data)
+        col, _ = st.columns([2, 3])
+        if col.button("💾 保存する", use_container_width=True):
+            path = save_log(data, logs_dir)
+            st.cache_data.clear()
+            st.success(f"保存しました: `{path}`")
+            del st.session_state["generated_log"]
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -158,14 +296,15 @@ selected_user = st.sidebar.selectbox("ユーザー", users)
 filtered = df if selected_user == "全員" else df[df["user"] == selected_user]
 
 _today = pd.Timestamp.now().date()
-_date_default = (df["date"].min().date(), df["date"].max().date()) if not df.empty else (_today, _today)
+_valid_dates = df["date"].dropna() if not df.empty and "date" in df.columns else pd.Series([], dtype="datetime64[ns]")
+_date_default = (_valid_dates.min().date(), _valid_dates.max().date()) if not _valid_dates.empty else (_today, _today)
 date_range = st.sidebar.date_input(
     "期間",
     value=_date_default,
 )
 if len(date_range) == 2 and not filtered.empty and "date" in filtered.columns:
     start, end = date_range
-    filtered = filtered[(filtered["date"].dt.date >= start) & (filtered["date"].dt.date <= end)]
+    filtered = filtered[(filtered["date"] >= pd.Timestamp(start)) & (filtered["date"] <= pd.Timestamp(end))]
 
 st.sidebar.markdown(f"**{len(filtered)}** 件のセッション")
 
@@ -174,7 +313,7 @@ if st.sidebar.button("キャッシュ更新"):
     st.rerun()
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["📈 概要", "👤 ユーザー別", "🤖 テキスト分析"])
+tab1, tab2, tab3 = st.tabs(["📈 概要", "👤 ユーザー別", "🤖 AI機能"])
 
 with tab1:
     kpi_cards(filtered)
@@ -195,6 +334,8 @@ with tab2:
     st.dataframe(display_df, use_container_width=True)
 
 with tab3:
+    log_form(LOGS_DIR)
+    st.divider()
     user_for_analysis = None if selected_user == "全員" else selected_user
-    if st.button("分析を実行"):
+    if st.button("パターン分析を実行"):
         text_analysis(filtered, user_for_analysis)
