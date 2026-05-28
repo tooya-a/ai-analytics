@@ -240,6 +240,67 @@ def generate_log_from_transcript(messages: list[dict], api_key: str) -> dict:
     return json.loads(text)
 
 
+CATEGORIES = ["bug_fix", "feature", "design", "refactor", "infrastructure", "question"]
+RESOLUTIONS = ["resolved", "unresolved", "in_progress"]
+
+
+def manual_log_form(logs_dir: str):
+    st.subheader("セッションログを手入力で記録")
+    st.caption("`/session-log` スキルを使わずに、ブラウザから直接ログを記録できます。")
+
+    with st.form("manual_log_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        user = c1.text_input("ユーザー名", value=_DEFAULT_USER or "")
+        date = c2.date_input("日付", value=datetime.now().date())
+        started_at = c3.text_input("開始時刻 (HH:MM)", value=datetime.now().strftime("%H:%M"))
+
+        c4, c5 = st.columns(2)
+        category = c4.selectbox("カテゴリ", CATEGORIES)
+        resolution = c5.selectbox("解決状況", RESOLUTIONS)
+
+        topic = st.text_input("トピック（1行で）", placeholder="例: ログ記録フォームの追加")
+        problem = st.text_area("解こうとした課題", height=80)
+        approach = st.text_area("試行錯誤の流れ", height=120)
+        output = st.text_input("成果物（任意）", placeholder="例: app.py の manual_log_form 関数")
+
+        c6, c7 = st.columns(2)
+        pivot_count = c6.number_input("ピボット回数", min_value=0, value=0, step=1)
+        key_decisions_text = c7.text_area("主要な意思決定（1行1項目）", height=80)
+
+        blockers_text = st.text_area("ブロッカー（1行1項目）", height=60)
+        notes = st.text_area("メモ（任意）", height=60)
+
+        submitted = st.form_submit_button("💾 保存する", use_container_width=True)
+
+    if submitted:
+        if not topic.strip():
+            st.error("トピックは必須です。")
+            return
+        if not user.strip():
+            st.error("ユーザー名は必須です。")
+            return
+
+        data = {
+            "user": user.strip(),
+            "date": date.isoformat(),
+            "started_at": started_at.strip() or None,
+            "category": category,
+            "topic": topic.strip(),
+            "problem": problem.strip(),
+            "approach": approach.strip(),
+            "resolution": resolution,
+            "output": output.strip() or None,
+            "pivot_count": int(pivot_count),
+            "key_decisions": [line.strip() for line in key_decisions_text.splitlines() if line.strip()],
+            "blockers": [line.strip() for line in blockers_text.splitlines() if line.strip()],
+            "notes": notes.strip() or None,
+        }
+        path = save_log(data, logs_dir)
+        st.cache_data.clear()
+        st.success(f"保存しました: `{path}`")
+        st.toast("ログを保存しました。サイドバーの「キャッシュ更新」または再読み込みで一覧に反映されます。", icon="✅")
+
+
 def log_form(logs_dir: str):
     st.subheader("セッションログを自動生成")
 
@@ -313,7 +374,7 @@ if st.sidebar.button("キャッシュ更新"):
     st.rerun()
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["📈 概要", "👤 ユーザー別", "🤖 AI機能"])
+tab1, tab2, tab_log, tab3 = st.tabs(["📈 概要", "👤 ユーザー別", "📝 ログ記録", "🤖 AI機能"])
 
 with tab1:
     kpi_cards(filtered)
@@ -332,6 +393,9 @@ with tab2:
     cols = [c for c in ["date", "user", "category", "topic", "pivot_count", "resolution"] if c in filtered.columns]
     display_df = filtered[cols].sort_values("date", ascending=False) if "date" in filtered.columns else filtered[cols]
     st.dataframe(display_df, use_container_width=True)
+
+with tab_log:
+    manual_log_form(LOGS_DIR)
 
 with tab3:
     log_form(LOGS_DIR)
